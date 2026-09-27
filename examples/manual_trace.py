@@ -1,6 +1,17 @@
-"""Placeholder for the first demo; running this file currently does nothing.
+from agentdr.events import Event
+from agentdr.recorder import record_event
 
-After implementing events and recording, create a synthetic completed tool call
-and save it to traces/manual.jsonl. Use a made-up tool result so this example
-needs neither an API key nor an agent framework.
-"""
+event = Event(
+    event_id="event-001",
+    run_id="run-001",
+    timestamp="2026-09-26T21:00:00Z",
+    event_type="tool_call",
+    data={
+        "tool": "read_file",
+        "arguments": {"path": "hello.txt"}
+    }
+)
+
+record_event(event, "traces/manual.json")
+
+print("event recorded")
