@@ -1,6 +1,13 @@
-"""Write events to a local trace file here.
+import json
+from pathlib import Path
 
-Next task: implement record_event(event, path) after defining the event format.
-Append one JSON object per line, creating the output directory when needed.
-Keep detection decisions outside this module.
-"""
+from agentdr.events import Event
+
+
+def record_event(event: Event, path: Path):
+    file_path=Path(path)
+
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("a") as f:
+        json.dump(event.to_dict(), f)
+        f.write("\n")
