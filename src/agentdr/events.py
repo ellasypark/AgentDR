@@ -1,6 +1,14 @@
-"""Define the event format here.
+from dataclasses import asdict, dataclass
+from datetime import datetime
+from typing import Any
 
-First task: represent one completed tool call using a standard-library dataclass.
-Start with event_id, run_id, timestamp, event_type, and data; see the README.
-Keep file writing and framework imports outside this module.
-"""
+@dataclass
+class Event:
+    event_id: str
+    run_id: str
+    timestamp: datetime
+    event_type: str
+    data: dict[str, Any]
+
+    def to_dict(self):
+        return asdict(self)
