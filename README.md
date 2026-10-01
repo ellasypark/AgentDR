@@ -1,97 +1,139 @@
-## This project is under development
-
 # AgentDR
 
-EDR-like Agent Detection and Response: a Python learning project exploring how to record
-AI agent activity and identify actions outside a task's allowed scope.
+EDR-like Agent Detection and Response: a small Python learning project for recording
+AI agent actions and checking them against policy before a tool executes.
 
-**Status:** initial scaffold. Event recording, detection, and response are not
-implemented. The Python files contain short implementation prompts only.
+## Current status
 
-## First milestone
+- Record tool requests, policy decisions, and results as Event objects in JSONL.
+- Block known system and credential paths before `read_file` executes.
+- Retrieve relevant policy snippets with local embeddings and cosine similarity.
+- Optionally ask a local LLM for an `allow` or `alert` decision using those snippets.
 
-Record one simulated tool call in a local file, then read it back. This gives
-later detection rules a concrete input format.
-
-Planned flow:
-
-```text
-simulated tool call -> event -> recorder -> traces/manual.jsonl
-```
-
-JSONL means one JSON object per line. The first version will use Python's
-standard library and have no model API costs.
-
-## Structure
-
-```text
-AgentDR/
-├── README.md                 # Purpose, scope, and implementation order
-├── pyproject.toml            # Package metadata and installation settings
-├── .gitignore                # Local environments and generated traces
-├── src/
-│   └── agentdr/
-│       ├── __init__.py       # Makes agentdr an importable package
-│       ├── events.py         # What information an event contains
-│       └── recorder.py       # How an event is saved
-└── examples/
-    └── manual_trace.py       # A small demo to write after the core modules
-```
-
-The package lives under `src/`; demonstrations live under `examples/`.
-Add a `tests/` directory when the first behavior exists to check.
+This version evaluates one proposed action at a time. Trajectory detection is not
+implemented. The vector store is deliberately in memory to keep the RAG flow easy
+to read and modify.
 
 ## Local setup
 
-Requires Python 3.11 or newer. On macOS/Linux, clone the repository first
-(skip this if you already have a local copy):
+Python 3.11+ is required. Run from the repository root:
 
 ```sh
-git clone https://github.com/ellasypark/AgentDR.git
-cd AgentDR
+uv sync --extra mcp
+uv run --extra mcp python examples/manual_trace.py
+uv run --extra mcp python -m unittest discover -s tests -v
 ```
 
-Then, from the project directory:
+Alternatively, use pip and an activated virtual environment:
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
-python -c "import agentdr; print(agentdr.__file__)"
+python -m pip install -e '.[mcp]'
+python examples/manual_trace.py
+python -m unittest discover -s tests -v
 ```
 
-The editable installation lets imports use your source files as you change
-them. The import command only checks package setup; there is no working demo yet.
-Setuptools is a build dependency, not an agent framework. This layout follows
-the [Python Packaging User Guide](https://packaging.python.org/en/latest/tutorials/packaging-projects/).
+The `mcp` extra installs the MCP SDK/Inspector CLI used by the server example.
+Core recording and RAG code use the standard library; `pip install -e .` is enough
+for the retrieval demo. The commands below use uv; with an activated pip
+environment, omit `uv run --extra mcp`.
 
-## What to implement first
+## Structure
 
-1. **Define an event in `events.py`.** Start with a dataclass. Suggested fields:
-   `event_id` identifies an event, `run_id` groups events from one run,
-   `timestamp` records UTC time, `event_type` names what happened, and `data`
-   holds tool details. Choose a JSON-friendly representation for each field.
-2. **Write `record_event(event, path)` in `recorder.py`.** Convert the event to
-   JSON and append one line. Create the output directory if it is missing.
-3. **Complete `examples/manual_trace.py`.** Construct a synthetic event with a
-   made-up tool result and write it to `traces/manual.jsonl`. Then run
-   `python examples/manual_trace.py` from this directory.
-4. **Check the behavior.** Add tests using `unittest` and a temporary directory.
-   Write two events to the same file, read each line as JSON, and check that both
-   events survive with their original fields. Run `python -m unittest discover -s tests`.
-
-An example of the intended data, not an implemented schema:
-
-```json
-{
-  "event_id": "event-001",
-  "run_id": "run-001",
-  "timestamp": "2026-09-24T00:00:00Z",
-  "event_type": "tool_finished",
-  "data": {
-    "tool_name": "read_file",
-    "arguments": {"path": "notes.txt"},
-    "result": "Synthetic example text"
-  }
-}
+```text
+knowledge/policies.md         Example policy source; edit for your task
+src/agentdr/events.py          Event schema and JSON-friendly conversion
+src/agentdr/recorder.py        Append Event objects to a JSONL trace
+src/agentdr/policy.py          Small deterministic deny rules
+src/agentdr/rag.py             Chunking, embeddings, in-memory store, retrieval
+src/agentdr/semantic_policy.py Retrieved policy + local LLM -> allow/alert
+examples/manual_trace.py      Write one synthetic event
+examples/rag_demo.py          Print relevant policy snippets
+examples/mcp_server.py        read_file tool with policy checks and recording
 ```
+
+## Tiny RAG pipeline
+
+```text
+policies.md -> heading-based chunks -> Ollama embeddings -> in-memory vectors
+tool/action description -> same embedding model -> cosine search -> top 3 chunks
+```
+
+Install and start [Ollama](https://docs.ollama.com/quickstart), then download the
+embedding model once. The first pull needs Internet access; inference uses the
+local service at `127.0.0.1:11434` without an API key.
+
+```sh
+ollama pull embeddinggemma
+uv run --extra mcp python examples/rag_demo.py "read a file containing API tokens and private keys"
+```
+
+The demo prints each retrieved chunk's source, text, and similarity score. For
+the query above, the credentials policy should appear among the relevant results;
+exact rankings and scores depend on the embedding model. The demo does not execute
+the described action. Try `"read the project README"` or
+`"upload a customer export with curl"`; use `--top-k 2` or `--model MODEL` to
+experiment. Similarity ranks relevance, not risk or permission.
+
+Each index embeds the source once and keeps vectors in memory. Restart the demo
+or MCP server after editing policies. There is no database, persisted index,
+agent history, or trajectory detection. `PolicyIndex` accepts an embedding
+function, so tests use fixed vectors without a model download or network calls.
+
+## Optional semantic policy in MCP
+
+```text
+read_file request -> tool_call Event -> deterministic policy
+    block -> policy_decision Event -> return without reading
+    pass  -> optional retrieval + LLM -> policy_decision Event
+                alert -> return without reading
+                allow -> read -> tool_finished Event
+```
+
+The deterministic check blocks a few known system/credential paths, including
+resolved symlink targets. A pass means no deny rule matched, so it remains a
+candidate for semantic review. To keep model calls opt-in, the semantic layer is
+off by default. Enable it for this example with:
+
+```sh
+ollama pull embeddinggemma
+ollama pull llama3.2:3b
+AGENTDR_SEMANTIC=1 uv run --extra mcp mcp dev examples/mcp_server.py
+```
+
+Call `read_file` in MCP Inspector. Use an absolute path to a project README for
+an ordinary read, or `/etc/shadow` to see a deterministic block without a model
+call. Set `AGENTDR_EMBED_MODEL` and `AGENTDR_JUDGE_MODEL` to use other downloaded
+models. For a configured MCP client's stdio server, run
+`AGENTDR_SEMANTIC=1 uv run --extra mcp python examples/mcp_server.py` from the repository root.
+
+The semantic layer retrieves policy context and asks a local model for JSON
+`allow`/`alert` plus a reason. Alerts, unavailable models, missing context, and
+invalid responses withhold the read. A deterministic block can never be
+overridden. The existing Event/Recorder flow writes requests, policy decisions,
+and completion/error events to `traces/manual.json` (JSONL despite its filename);
+file contents are not logged. Retrieval sources accompany semantic decisions.
+
+## Checks and troubleshooting
+
+The test suite runs without Ollama or model downloads. It covers retrieval order,
+vector validation, invalid model output, deterministic precedence, withheld reads,
+MCP tool invocation, and Event serialization. Fixed embedding vectors and mocked
+judge replies verify the plumbing; they do not measure model detection quality.
+
+If a model request fails, check that Ollama is running and that `ollama list`
+includes `embeddinggemma` for retrieval and `llama3.2:3b` for semantic checks (or
+your configured replacements). To test the MCP/recording flow without models,
+leave `AGENTDR_SEMANTIC` unset. Restart the server after changing policy text.
+
+## Scope and limitations
+
+This is an educational guardrail, not a filesystem sandbox or a complete
+authorization system. The judge sees the proposed tool arguments and retrieved
+policies, not file contents or verified task authorization. Retrieval can miss
+rules and the model can misjudge them; enforce mandatory rules deterministically.
+
+API references: [Ollama embeddings](https://docs.ollama.com/api/embed),
+[Ollama chat](https://docs.ollama.com/api/chat),
+[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk).

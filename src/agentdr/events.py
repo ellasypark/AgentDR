@@ -6,9 +6,12 @@ from typing import Any
 class Event:
     event_id: str
     run_id: str
-    timestamp: datetime
+    timestamp: datetime | str
     event_type: str
     data: dict[str, Any]
 
     def to_dict(self):
-        return asdict(self)
+        data = asdict(self)
+        if isinstance(self.timestamp, datetime):
+            data["timestamp"] = self.timestamp.isoformat()
+        return data
