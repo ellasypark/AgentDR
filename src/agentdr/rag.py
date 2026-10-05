@@ -2,10 +2,13 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 import json
 import math
+import os
 from pathlib import Path
 import re
+from typing import Protocol
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -47,6 +50,12 @@ class Chunk:
 class Match:
     chunk: Chunk
     score: float
+
+
+class Retriever(Protocol):
+    """The interface shared by the memory and PostgreSQL stores."""
+
+    def retrieve(self, query: str, top_k: int = 3) -> list[Match]: ...
 
 
 def chunk_markdown(text: str, source: str, max_words: int = 160) -> list[Chunk]:
@@ -110,3 +119,24 @@ class PolicyIndex:
             for chunk, vector in zip(self.chunks, self.vectors, strict=True)
         ]
         return sorted(matches, key=lambda match: match.score, reverse=True)[:top_k]
+
+
+def load_policy_index(
+    path: Path, *, store: str | None = None, model: str | None = None,
+) -> Retriever:
+    """Select storage; importing the default memory implementation needs no DB driver."""
+    store = store if store is not None else os.getenv("AGENTDR_RAG_STORE", "memory")
+    model = model if model is not None else os.getenv("AGENTDR_EMBED_MODEL", "embeddinggemma")
+    embed = partial(ollama_embed, model=model)
+    if store == "memory":
+        return PolicyIndex.from_markdown(path, embed)
+    if store == "pgvector":
+        database_url = os.getenv("AGENTDR_DATABASE_URL")
+        if not database_url:
+            raise ValueError("Set AGENTDR_DATABASE_URL when using pgvector")
+        from agentdr.pgvector_store import PgvectorIndex
+
+        return PgvectorIndex.from_markdown(
+            path, database_url=database_url, model=model, embed=embed,
+        )
+    raise ValueError("AGENTDR_RAG_STORE must be memory or pgvector")

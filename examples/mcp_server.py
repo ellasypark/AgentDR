@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from functools import lru_cache, partial
+from functools import lru_cache
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -8,7 +8,7 @@ from mcp.server import MCPServer
 
 from agentdr.events import Event
 from agentdr.policy import check_file_access
-from agentdr.rag import PolicyIndex, ollama_embed
+from agentdr.rag import load_policy_index
 from agentdr.recorder import record_event
 from agentdr.semantic_policy import SemanticDecision, SemanticPolicy
 
@@ -31,8 +31,7 @@ def record(event_type: str, data: dict):
 @lru_cache(maxsize=1)
 def get_semantic_policy() -> SemanticPolicy:
     # Lazy: deterministic blocks never require a model or policy ingestion.
-    embed = partial(ollama_embed, model=os.getenv("AGENTDR_EMBED_MODEL", "embeddinggemma"))
-    index = PolicyIndex.from_markdown(PROJECT_ROOT / "knowledge/policies.md", embed)
+    index = load_policy_index(PROJECT_ROOT / "knowledge/policies.md")
     return SemanticPolicy(index, model=os.getenv("AGENTDR_JUDGE_MODEL", "llama3.2:3b"))
 
 

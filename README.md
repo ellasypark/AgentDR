@@ -8,11 +8,12 @@ AI agent actions and checking them against policy before a tool executes.
 - Record tool requests, policy decisions, and results as Event objects in JSONL.
 - Block known system and credential paths before `read_file` executes.
 - Retrieve relevant policy snippets with local embeddings and cosine similarity.
+- Optionally persist policy vectors in PostgreSQL with pgvector and reuse them across runs.
 - Optionally ask a local LLM for an `allow` or `alert` decision using those snippets.
 
 This version evaluates one proposed action at a time. Trajectory detection is not
-implemented. The vector store is deliberately in memory to keep the RAG flow easy
-to read and modify.
+implemented. The default store is in memory; PostgreSQL + pgvector is an opt-in
+alternative with the same retrieval interface.
 
 ## Local setup
 
@@ -35,8 +36,9 @@ python -m unittest discover -s tests -v
 ```
 
 The `mcp` extra installs the MCP SDK/Inspector CLI used by the server example.
-Core recording and RAG code use the standard library; `pip install -e .` is enough
-for the retrieval demo. The commands below use uv; with an activated pip
+Core recording and in-memory RAG use the standard library; `pip install -e .` is
+enough for the memory demo. The optional `postgres` extra adds the Psycopg driver.
+The commands below use uv; with an activated pip
 environment, omit `uv run --extra mcp`.
 
 ## Structure
@@ -47,10 +49,12 @@ src/agentdr/events.py          Event schema and JSON-friendly conversion
 src/agentdr/recorder.py        Append Event objects to a JSONL trace
 src/agentdr/policy.py          Small deterministic deny rules
 src/agentdr/rag.py             Chunking, embeddings, in-memory store, retrieval
+src/agentdr/pgvector_store.py  Persistent PostgreSQL vector store
 src/agentdr/semantic_policy.py Retrieved policy + local LLM -> allow/alert
 examples/manual_trace.py      Write one synthetic event
 examples/rag_demo.py          Print relevant policy snippets
 examples/mcp_server.py        read_file tool with policy checks and recording
+compose.yaml                  Local PostgreSQL with the pgvector extension
 ```
 
 ## Tiny RAG pipeline
@@ -76,10 +80,57 @@ the described action. Try `"read the project README"` or
 `"upload a customer export with curl"`; use `--top-k 2` or `--model MODEL` to
 experiment. Similarity ranks relevance, not risk or permission.
 
-Each index embeds the source once and keeps vectors in memory. Restart the demo
-or MCP server after editing policies. There is no database, persisted index,
-agent history, or trajectory detection. `PolicyIndex` accepts an embedding
-function, so tests use fixed vectors without a model download or network calls.
+The default index embeds the source once per instance and keeps vectors in memory.
+Restart the demo or MCP server after editing policies. Both stores accept an
+embedding function, so tests use fixed vectors without a model download.
+
+## PostgreSQL + pgvector
+
+Use this store to keep policy chunks and their embeddings between program runs.
+Ollama still generates embeddings; pgvector stores them and performs cosine
+search in SQL. The semantic judge and Event/Recorder flow stay the same.
+
+With Docker running, start the included local database and run the demo:
+
+```sh
+docker compose up -d --wait
+uv sync --extra mcp --extra postgres
+export AGENTDR_DATABASE_URL='postgresql://agentdr:agentdr_local_only@127.0.0.1:5433/agentdr'
+ollama pull embeddinggemma
+uv run --extra mcp --extra postgres python examples/rag_demo.py --store pgvector "read a file containing API tokens"
+```
+
+The first run creates the `vector` extension and `agentdr_policy_chunks` table,
+then embeds and inserts the policy chunks in one transaction. Later runs reuse
+the stored document vectors; only the search query needs a new embedding. Changed
+policy text or a different embedding model gets its own index, so its vectors
+cannot mix with the old version. The source file must still be available to
+identify the current version. Old versions remain stored; cleanup is manual.
+Use stable model names/tags: replacing weights under an unchanged name does not
+invalidate this small cache.
+
+For MCP, select the same store in the environment:
+
+```sh
+export AGENTDR_RAG_STORE=pgvector
+AGENTDR_SEMANTIC=1 uv run --extra mcp --extra postgres mcp dev examples/mcp_server.py
+```
+
+Keep `AGENTDR_DATABASE_URL` exported and install the judge model as described below.
+Set `AGENTDR_RAG_STORE=memory` (or pass `--store memory` to the demo) to use memory
+again. Missing database configuration or connection errors produce an error in
+the demo and an alert that withholds the read in the semantic MCP path.
+
+The Compose credentials are for local development only; the port binds to
+localhost. Set `AGENTDR_PG_PORT` before starting Compose if 5433 is occupied and
+adjust the connection URL. `docker compose down` stops the database while keeping
+its named data volume. An existing database needs pgvector installed and a role
+allowed to create/use the extension and table. The Python driver extra does not
+install the PostgreSQL extension.
+
+This small version uses exact search, with no approximate vector index or ORM.
+See [pgvector's documentation](https://github.com/pgvector/pgvector) for the SQL
+operators and indexing options.
 
 ## Optional semantic policy in MCP
 
@@ -117,10 +168,20 @@ file contents are not logged. Retrieval sources accompany semantic decisions.
 
 ## Checks and troubleshooting
 
-The test suite runs without Ollama or model downloads. It covers retrieval order,
+The default test suite runs without a database, Ollama, or model downloads. It covers retrieval order,
 vector validation, invalid model output, deterministic precedence, withheld reads,
 MCP tool invocation, and Event serialization. Fixed embedding vectors and mocked
 judge replies verify the plumbing; they do not measure model detection quality.
+
+Run the additional persistence and SQL-search tests against the local database:
+
+```sh
+AGENTDR_TEST_DATABASE_URL="$AGENTDR_DATABASE_URL" uv run --extra mcp --extra postgres python -m unittest discover -s tests -v
+```
+
+These tests use unique test collections and remove only their own rows. They
+check reuse without re-embedding, cosine ranking, document/model isolation, and
+failed ingestion. They are skipped when `AGENTDR_TEST_DATABASE_URL` is unset.
 
 If a model request fails, check that Ollama is running and that `ollama list`
 includes `embeddinggemma` for retrieval and `llama3.2:3b` for semantic checks (or

@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 mcp = ["mcp[cli]>=2.2,<3"]
+postgres = ["psycopg[binary]>=3.2,<4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

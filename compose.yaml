@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17
+    environment:
+      POSTGRES_DB: agentdr
+      POSTGRES_USER: agentdr
+      POSTGRES_PASSWORD: agentdr_local_only
+    ports:
+      - "127.0.0.1:${AGENTDR_PG_PORT:-5433}:5432"
+    volumes:
+      - policy-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentdr -d agentdr"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  policy-data:

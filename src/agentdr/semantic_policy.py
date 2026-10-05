@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from typing import Literal
 
-from agentdr.rag import PolicyIndex, ollama_request
+from agentdr.rag import Retriever, ollama_request
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class SemanticDecision:
 
 
 class SemanticPolicy:
-    def __init__(self, index: PolicyIndex, model: str = "llama3.2:3b"):
+    def __init__(self, index: Retriever, model: str = "llama3.2:3b"):
         self.index = index
         self.model = model
 
