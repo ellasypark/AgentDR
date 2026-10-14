@@ -2,18 +2,36 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, lru_cache
 import json
 import math
 import os
 from pathlib import Path
+from pydoc import text
 import re
 from typing import Protocol
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from langchain_ollama import OllamaEmbeddings
+
+
 Embed = Callable[[list[str]], list[list[float]]]
 
+
+@lru_cache
+def _get_embedder(model: str) -> OllamaEmbeddings:
+    return OllamaEmbeddings(
+        model=model,
+        base_url="http://127.0.0.1:11434",
+    )
+
+def ollama_embed(
+    texts: list[str],
+    model: str = "embeddinggemma",
+) -> list[list[float]]:
+    embedder = _get_embedder(model)
+    return embedder.embed_documents(texts)
 
 def ollama_request(endpoint: str, payload: dict) -> dict:
     """Use the local service only; no hosted API key or Ollama SDK is required."""
