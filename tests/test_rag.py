@@ -46,10 +46,12 @@ class RetrievalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             index.retrieve("read")
 
-    @patch("agentdr.rag.ollama_request", return_value={"embeddings": [[1, 2]]})
-    def test_embedding_adapter_uses_batch_and_explicit_model(self, request):
+    @patch("agentdr.rag._get_embedder")
+    def test_embedding_adapter_uses_batch_and_explicit_model(self, get_embedder):
+        get_embedder.return_value.embed_documents.return_value = [[1, 2]]
         self.assertEqual(ollama_embed(["policy"], model="local-embed"), [[1, 2]])
-        request.assert_called_once_with("embed", {"model": "local-embed", "input": ["policy"], "truncate": False})
+        get_embedder.assert_called_once_with("local-embed")
+        get_embedder.return_value.embed_documents.assert_called_once_with(["policy"])
 
 
 class SemanticTests(unittest.TestCase):
